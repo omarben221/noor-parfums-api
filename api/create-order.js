@@ -1,14 +1,25 @@
 export default async function handler(req, res) {
-  // Allow your domain only
-  res.setHeader('Access-Control-Allow-Origin', 'https://noorparfum.com');
+  // CORS headers - must be set before anything else
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  // Handle preflight OPTIONS request
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   const SHOPIFY_DOMAIN = 'mtkwni-yf.myshopify.com';
-  const ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN; // Store in Vercel env vars
+  const ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
+
+  if (!ACCESS_TOKEN) {
+    return res.status(500).json({ success: false, error: 'Missing access token' });
+  }
 
   try {
     const formData = req.body;
@@ -28,12 +39,12 @@ export default async function handler(req, res) {
         }],
         customer: {
           first_name: formData.customer.fullName.split(' ')[0],
-          last_name: formData.customer.fullName.split(' ').slice(1).join(' '),
+          last_name: formData.customer.fullName.split(' ').slice(1).join(' ') || '-',
           phone: formData.customer.phone
         },
         shipping_address: {
           first_name: formData.customer.fullName.split(' ')[0],
-          last_name: formData.customer.fullName.split(' ').slice(1).join(' '),
+          last_name: formData.customer.fullName.split(' ').slice(1).join(' ') || '-',
           address1: formData.customer.address,
           city: formData.customer.city,
           country: 'MA',
@@ -45,7 +56,7 @@ export default async function handler(req, res) {
       }
     };
 
-    // Create draft order
+    // Step 1: Create draft order
     const draftRes = await fetch(`https://${SHOPIFY_DOMAIN}/admin/api/2024-01/draft_orders.json`, {
       method: 'POST',
       headers: {
@@ -55,10 +66,15 @@ export default async function handler(req, res) {
       body: JSON.stringify(draftOrderData)
     });
 
-    if (!draftRes.ok) throw new Error(`Draft failed: ${draftRes.status}`);
-    const draft = await draftRes.json();
+    const draftText = await draftRes.text();
 
-    // Complete the draft order
+    if (!draftRes.ok) {
+      throw new Error(`Draft failed: ${draftRes.status} - ${draftText}`);
+    }
+
+    const draft = JSON.parse(draftText);
+
+    // Step 2: Complete the draft order
     const completeRes = await fetch(
       `https://${SHOPIFY_DOMAIN}/admin/api/2024-01/draft_orders/${draft.draft_order.id}/complete.json`,
       {
@@ -71,22 +87,22 @@ export default async function handler(req, res) {
       }
     );
 
-    if (!completeRes.ok) throw new Error(`Complete failed: ${completeRes.status}`);
-    const completed = await completeRes.json();
+    const completeText = await completeRes.text();
 
-    res.status(200).json({
+    if (!completeRes.ok) {
+      throw new Error(`Complete failed: ${completeRes.status} - ${completeText}`);
+    }
+
+    const completed = JSON.parse(completeText);
+
+    return res.status(200).json({
       success: true,
       orderId: completed.draft_order.id,
       orderNumber: completed.draft_order.name
     });
 
   } catch (error) {
-    console.error('Order error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Order error:', error.message);
+    return res.status(500).json({ success: false, error: error.message });
   }
 }
-```
-
-**Step 2:** In Vercel dashboard → Settings → Environment Variables, add:
-```
-SHOPIFY_ACCESS_TOKEN = 2757434cca5ea56dc3375c460b61e913
